@@ -1,0 +1,904 @@
+#region Using declarations
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Xml.Serialization;
+using NinjaTrader.Cbi;
+using NinjaTrader.Gui;
+using NinjaTrader.Gui.Chart;
+using NinjaTrader.Gui.SuperDom;
+using NinjaTrader.Gui.Tools;
+using NinjaTrader.Data;
+using NinjaTrader.NinjaScript;
+using NinjaTrader.Core.FloatingPoint;
+using NinjaTrader.NinjaScript.Indicators;
+using NinjaTrader.NinjaScript.DrawingTools;
+#endregion
+
+//This namespace holds Strategies in this folder and is required. Do not change it. 
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public class OptimusPrimeStrategy : Strategy
+	{
+		private Optimus Optimus1;
+		//private ADX ADX1;
+		private int OldCount=0; 
+		///private string OldTag="";
+		private bool haltProcessing = false;
+		private ParabolicSAR ParabolicSAR1;
+		private LindaMACD LindaMACD1;
+		private double AccountRealizedPL;
+        private double AccountUnrealizedPL;
+		private double CashValue;
+		private double DailyPnL;
+		private bool CanTrade= true;
+		
+		
+		protected override void OnStateChange()
+		{
+			if (State == State.SetDefaults)
+			{ 
+				Description									= @"Enter the description for your new custom Strategy here.";
+				Name										= "OptimusPrime";
+				Calculate									= Calculate.OnBarClose;
+				EntriesPerDirection							= 1;
+				EntryHandling								= EntryHandling.AllEntries;
+				IsExitOnSessionCloseStrategy				= true;
+				ExitOnSessionCloseSeconds					= 30;
+				IsFillLimitOnTouch							= false;
+				MaximumBarsLookBack							= MaximumBarsLookBack.TwoHundredFiftySix;
+				OrderFillResolution							= OrderFillResolution.Standard;
+				Slippage									= 0;
+				StartBehavior								= StartBehavior.WaitUntilFlat;
+				TimeInForce									= TimeInForce.Gtc;
+				TraceOrders									= false;
+				RealtimeErrorHandling						= RealtimeErrorHandling.StopCancelClose;
+				StopTargetHandling							= StopTargetHandling.PerEntryExecution;
+				BarsRequiredToTrade							= 20;
+				// Disable this property for performance gains in Strategy Analyzer optimizations
+				// See the Help Guide for additional information
+				IsInstantiatedOnEachOptimizationIteration	= true;
+				BlankCandleTag								= @"3567"; 		
+				DailyTakeProfit 							= 1300;
+				DailyStopLoss 								= -2000;
+				MontlyTarget								= 160000;
+			}
+			else if (State == State.Configure)
+			{
+				//AddChartIndicator(Optimus(Close, true, false, true, false, false, false, true, true, true, 0, true, true, true, true, true, true, true, false, false, false, @"username@gmail.com", false, 160, 80, false, 40));
+				Optimus1 = Optimus(Close, true, false, true, false, false, false, true, true, true, 0, true, false, true, true, true, true, true, false, false, false, @"username@gmail.com", false, 160, 80, false, 40);
+			//    LindaMACD1				= LindaMACD(Close);
+			//	LindaMACD1.Plots[0].Brush = Brushes.Green;
+			//	AddChartIndicator(LindaMACD1);
+			    OldCount = 0;
+			
+			}
+			
+			else if (State == State.DataLoaded)
+			{				
+				ParabolicSAR1				= ParabolicSAR(Close, 0.02, 0.2, 0.02);
+				AddChartIndicator(ParabolicSAR1);
+				LindaMACD1				= LindaMACD(Close);
+			//	LindaMACD1.Plots[0].Brush = Brushes.Green;
+				AddChartIndicator(LindaMACD1);
+			}
+
+		}
+		
+		protected override void OnAccountItemUpdate(Cbi.Account account, Cbi.AccountItem accountItem, double value)
+        {
+            // Updated Account P&L
+            AccountRealizedPL = account.Get(AccountItem.RealizedProfitLoss, Currency.UsDollar);
+            AccountUnrealizedPL = account.Get(AccountItem.UnrealizedProfitLoss, Currency.UsDollar);
+		    CashValue=account.Get(AccountItem.CashValue, Currency.UsDollar);
+		  
+			
+        }
+
+		protected override void OnBarUpdate()
+		{
+			if (BarsInProgress != 0) 
+				return;
+
+			if (CurrentBars[0] < 1)
+				return;
+			//int currentDay = Bars.GetTime(0).Day;
+           // int previousDay = Bars.GetTime(1).Day;
+			
+			//Print("currentDay " + currentDay + " /  previousDay " +previousDay );
+			if( ( Times[0][0].TimeOfDay >= new TimeSpan(6, 0, 0) && (Times[0][0].TimeOfDay <= new TimeSpan(06, 05, 0)) )||  (DailyPnL==0 )) //(DailyPnL != CashValue && Times[0][0].TimeOfDay >= new TimeSpan(18, 0, 0) ) ||  (DailyPnL==0 ))
+			{
+				DailyPnL = CashValue;
+				CanTrade=true;
+			}
+		
+			
+			//Here I added the AccountUnrealizedPL values to them to use whats currently open
+			if((CashValue - DailyPnL)+AccountUnrealizedPL < DailyStopLoss)
+			{
+				Print("HIT DAILY SL " + DailyStopLoss);
+				//StopStrategy();  //was here.. trying to move it down to see if it changes anything
+				CanTrade=false;
+				StopStrategy();
+			}
+			
+		    if( (CashValue - DailyPnL)+AccountUnrealizedPL >DailyTakeProfit)
+			{
+				Print("HIT DAILY TP " + DailyTakeProfit);
+				
+				CanTrade=false;
+				StopStrategy();
+			}
+		
+			if( CashValue +AccountUnrealizedPL >= MontlyTarget ) 
+			{
+				Print("HIT MONTHLY TP " + DailyTakeProfit);
+				
+				CanTrade=false;
+				StopStrategy();
+			}
+		
+			if( AccountUnrealizedPL <  DailyStopLoss)
+			{
+				Print("HIT DAILY SL " + DailyStopLoss);
+				CanTrade=false;
+				StopStrategy();
+			}
+		
+		//trying my hand at ATM (trailling SL)
+      if(Position.MarketPosition == MarketPosition.Long || Position.MarketPosition == MarketPosition.Short)
+		  {
+			if (Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) >= 1000   && Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) <= 2000)
+			{
+				Print("HIT 1k - moving to BE " + AccountUnrealizedPL);
+				
+				SetStopLoss(CalculationMode.Price, Position.AveragePrice);
+			}
+			
+		
+            if( Position.MarketPosition == MarketPosition.Long)
+			{
+			
+		//	if( AccountUnrealizedPL >=  2000  && AccountUnrealizedPL <=3000 )
+			if (Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) >= 2000   && Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) <= 3000)
+			{
+				Print("HIT 2k - moving to 1k " + AccountUnrealizedPL);
+				
+				SetStopLoss(CalculationMode.Currency, 1000);
+			}
+			
+			if (Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) >= 3000   && Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) <= 4000)
+
+			{
+				Print("HIT 3k - moving to 2k " + AccountUnrealizedPL);
+				
+				SetStopLoss(CalculationMode.Currency, 2000);
+			}			
+			
+			if (Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) >= 4000   && Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) <= 5000)
+			{
+				Print("HIT 4k - moving to 3k " + AccountUnrealizedPL);
+				
+				SetStopLoss(CalculationMode.Currency, 3000);
+			}			
+			
+			}//end if th emarket is long
+			
+			else if (Position.MarketPosition == MarketPosition.Short)	
+			{
+			
+			if (Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) >= 2000   && Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) <= 3000)
+			{
+				Print("HIT 2k - moving to 1k " + AccountUnrealizedPL);
+				
+				SetStopLoss(CalculationMode.Currency, -1000);
+			}
+			
+			if (Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) >= 3000   && Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) <= 4000)
+
+			{
+				Print("HIT 3k - moving to 2k " + AccountUnrealizedPL);
+				
+				SetStopLoss(CalculationMode.Currency, -2000);
+			}			
+			
+			if (Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) >= 4000   && Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) <= 5000)
+			{
+				Print("HIT 4k - moving to 3k " + AccountUnrealizedPL);
+				
+				SetStopLoss(CalculationMode.Currency, -3000);
+			}			
+			
+			}//end if th emarket is short
+		   }
+		    Print(Account.Name); 
+			Print("CashValue " + CashValue); 
+			Print("DailyPnL " + DailyPnL);
+			Print(" AccountRealizedPL " + AccountRealizedPL);
+			Print("AccountUnrealizedPL " + AccountUnrealizedPL);
+			
+		//	Print("  FisherTransform(9)[0] " + FisherTransform(9)[0]);
+		//	Print(" Slope(HMA(7), 3, 0) " + Slope(HMA(7), 3, 0));
+			
+			//Print(" Gaps " + ncatOpeningGaps.Value[0][0]);
+
+			// When we determine to stop our strategy all logic in the OnBarUpdate() method will cease.
+			if (haltProcessing)
+				return;
+		
+			/*
+			  // After our strategy has a PnL greater than $1300 or less than -$2000 we will stop our strategy
+			if (SystemPerformance.AllTrades.TradesPerformance.Currency.CumProfit > DailyTakeProfit 
+				|| SystemPerformance.AllTrades.TradesPerformance.Currency.CumProfit < DailyStopLoss)
+			{
+				// A custom method designed to close all open positions and cancel all working orders will be called.
+				StopStrategy();
+			}
+			
+			*/
+			
+			/*
+			
+			 to get the two values to filer the enteries more
+			 double value = FisherTransform(10)[0];  //which should be >0 for longs and <0 for shorts
+			  double value = HMA(20)[0]; //this one the slopes is what we are looking for .. so not sure..
+			 
+			 // Prints the slope of the 20 period simple moving average of the last 10 bars
+               Print(Slope(SMA(20), 10, 0));
+			
+			*/
+			
+			/*
+			// After our strategy has a PnL greater than $1300 or less than -$2000 we will stop our strategy
+			if (AccountRealizedPL > DailyTakeProfit 
+				|| AccountRealizedPL < DailyStopLoss)
+			{
+				// A custom method designed to close all open positions and cancel all working orders will be called.
+				StopStrategy();
+			}
+			*/
+			
+		  //TEMP REMOVING THE TIME REQUREMENT TO TEST TOMORROW AM
+ 
+	
+				OldCount = DrawObjects.Count;
+		     	int PrevCandle = CurrentBar-1;
+				 
+				   Print(" number of drawings " + DrawObjects.Count + " OldCount " + OldCount );
+				   Print(" BlankCandleTag " + BlankCandleTag);
+
+					List<IDrawingTool> drawingTools = DrawObjects.ToList();
+	  
+      /* //all non-working lindaMCAD color calcs
+			 //Print(LindaMACD1[1].ToString.C
+		//	Color myColor = ((SolidColorBrush)LindaMACD1.BarBrushes[0]).Color;
+		//	Print(myColor.R + " " + myColor.G + " " + myColor.B);
+			Print(" LindaMCAD " + LindaMACD1.Plots[0].Brush);
+		    
+			Print(" LindaMACD1.BarBrushes[0] " +  LindaMACD1.BarBrushes[0]);
+			
+			Print(" LindaMACD1.BarBrush " + LindaMACD1.BarBrush);
+ 
+			Print("  LindaMACD1.LINDAMACD.NinjaScript.BarBrushes[0] " + LindaMACD1.LINDAMACD.NinjaScript.BarBrushes[0]);
+			
+			Print(" LindaMACD1.LINDAMACD.NinjaScript.Plots[0].Brush " + LindaMACD1.LINDAMACD.NinjaScript.Plots[0].Brush);
+			
+				  	
+							//ENTRY TIME CHECK:
+					        // TRADING TIMES ALLOWED
+							if  (
+									((Times[0][0].TimeOfDay >= new TimeSpan(07, 00, 0))
+									 && (Times[0][0].TimeOfDay <= new TimeSpan(08, 30, 0)))
+									 || ((Times[0][0].TimeOfDay >= new TimeSpan(15, 0, 0))
+									 && (Times[0][0].TimeOfDay <= new TimeSpan(16, 30, 0)))
+									 || ((Times[0][0].TimeOfDay >= new TimeSpan(18, 0, 0))
+									 && (Times[0][0].TimeOfDay <= new TimeSpan(23, 50, 0)))
+									)
+								{
+							
+			
+			
+	 */
+			
+		//	SampleBoolSeries().BullIndication[0]
+			//Print (" linaColor[0] " + LindaMACD1.LindaColor[0]);
+			//Print (" linaColor " + LindaMACD1.LindaColor);
+		  //	Print (" Linadcolor " + LindaMACD().LindaColor);
+		//	Print ("ParabolicSAR1[1] " + ParabolicSAR1[1]);
+		//	Print("PrevCandle " +PrevCandle);
+		
+			if(CanTrade)
+			{
+					Print(" Close[1] " + Close[1] +" ParabolicSAR1[1] "+ParabolicSAR1[1] + " LindaMACD().LindaColor " + LindaMACD().LindaColor + "  FisherTransform(9)[0] " +FisherTransform(9)[0] +  " Slope(HMA(7), 3, 0) " +Slope(HMA(7), 3, 0) ); //this is how it was and made 10k 
+					Print(" Close[0] " + Close[0] +" ParabolicSAR1[1] "+ParabolicSAR1[0] + " LindaMACD().LindaColor " + LindaMACD().LindaColor + "  FisherTransform(9)[0] " +FisherTransform(9)[0] +  " HMA(7)[1] " + HMA(7)[1] +  " HMA(7)[0] " + HMA(7)[0]);
+									
+					     if (drawingTools[0] is DrawingTools.Text)
+					      {
+					           DrawingTools.Text myDrawText = drawingTools[0] as DrawingTools.Text;
+							  /// DrawingTools.Text myDrawText1 = drawingTools[drawingTools.Count-1] as DrawingTools.Text;
+							  
+						//	   Print(" bars ago " + myDrawText.Anchor.BarsAgo);
+						   Print(myDrawText.Anchor.Time);
+					            //int curBar = CurrentBar;  
+						//	  Print(" tag check" );
+						//	   Print( "D" +CurrentBar);
+					   //      Print(" Text objects: " + myDrawText.Tag + " TextBrush: " + myDrawText.TextBrush + " Time " + myDrawText.GetAttachedToChartBars().Count);
+							if( myDrawText.Tag == "D" +CurrentBar)// myDrawText.Tag == "D" +CurrentBar || myDrawText.Anchor.Time == Time[0])  //if(myDrawText.Anchor.BarsAgo == 0) //if(myDrawText.Tag != BlankCandleTag)
+							{
+						 //myDrawText.Tag == "D" +CurrentBar - might have some lag.. checking each of these three
+					     //myDrawText.Anchor.BarsAgo - skipped a close <-- so far the best one tho
+				         //myDrawText.Anchor.Time == Time[0]
+						   
+					     //the orignal 12k win for march did not have a time limit so it traded from 0-24 hrs
+							//ENTRY TIME CHECK:
+					        // TRADING TIMES ALLOWED
+							if  (
+									((Times[0][0].TimeOfDay >= new TimeSpan(07, 00, 0))
+									 && (Times[0][0].TimeOfDay <= new TimeSpan(16, 50, 0)))
+									 || ((Times[0][0].TimeOfDay >= new TimeSpan(18, 0, 0))
+									 && (Times[0][0].TimeOfDay <= new TimeSpan(23, 50, 0)))
+									)
+								{
+								
+								
+								
+							  if(myDrawText.TextBrush  == Brushes.Lime && myDrawText.DisplayText == "▲" && Position.MarketPosition == MarketPosition.Flat && Close[0] > ParabolicSAR1[0] && (LindaMACD().LindaColor==1 || LindaMACD().LindaColor ==2) && FisherTransform(9)[0] >0 && HMA(7)[1] < HMA(7)[0] ) // Slope(HMA(7), 3, 0) >0 )
+							  {
+								  EnterLong(Convert.ToInt32(DefaultQuantity), @"OptimusBuy10");
+								  Print(" Buy! " + myDrawText.Tag + "text = " +myDrawText.DisplayText);
+								 // OldTag = myDrawText.Tag; 
+							  }
+							  
+
+							  
+							  if(myDrawText.TextBrush  == Brushes.Red && myDrawText.DisplayText == "▼"  && Position.MarketPosition == MarketPosition.Flat && Close[0] < ParabolicSAR1[0] && (LindaMACD().LindaColor==3 || LindaMACD().LindaColor ==4) && FisherTransform(9)[0] <0 && HMA(7)[1] > HMA(7)[0] ) // Slope(HMA(7), 3, 0) <0 )
+							  {
+								  EnterShort(Convert.ToInt32(DefaultQuantity), @"OptimusSell10");
+								  Print(" Sell! " + myDrawText.Tag + "text = " +myDrawText.DisplayText);
+								 // OldTag = myDrawText.Tag; 
+							  }
+							  
+							  if(myDrawText.TextBrush  == Brushes.Lime && myDrawText.DisplayText == "▲" && Position.MarketPosition == MarketPosition.Short && Close[0] > ParabolicSAR1[0] && (LindaMACD().LindaColor==1 || LindaMACD().LindaColor ==2) && FisherTransform(9)[0] >0 &&  HMA(7)[1] < HMA(7)[0] )  // Slope(HMA(7), 3, 0) >0 )
+							  {
+								  EnterLong(Convert.ToInt32(DefaultQuantity), @"OptimusBuy10");
+								  Print(" Long on a short trade " + myDrawText.Tag + "text = " +myDrawText.DisplayText);
+								 // OldTag = myDrawText.Tag; 
+							  }							  
+							  
+							  if(myDrawText.TextBrush  == Brushes.Red && myDrawText.DisplayText == "▼"  && Position.MarketPosition == MarketPosition.Long && Close[0] < ParabolicSAR1[0] && (LindaMACD().LindaColor==3 || LindaMACD().LindaColor ==4) && FisherTransform(9)[0] <0 && HMA(7)[1] > HMA(7)[0] ) //Slope(HMA(7), 3, 0) <0)
+							  {
+								  EnterShort(Convert.ToInt32(DefaultQuantity), @"OptimusSell10");
+								  Print(" Short on a long trade! " + myDrawText.Tag + "text = " +myDrawText.DisplayText);
+								 // OldTag = myDrawText.Tag; 
+							  }
+							
+							 } //END OF ENTRY TIMES
+							 		
+																									
+							  if(myDrawText.TextBrush  == Brushes.Lime && myDrawText.DisplayText == "▲" && Position.MarketPosition == MarketPosition.Short)
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Long on a short trade close " + myDrawText.Tag + "text1 = " +myDrawText.DisplayText);
+								 // OldTag = myDrawText1.Tag; 
+							  }							  
+							  
+							  if(myDrawText.TextBrush  == Brushes.Red && myDrawText.DisplayText == "▼"  && Position.MarketPosition == MarketPosition.Long)
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Short on a long trade close " + myDrawText.Tag + "text1 = " +myDrawText.DisplayText);
+								 // OldTag = myDrawText1.Tag; 
+							  }
+																
+										
+							  
+							  if(myDrawText.TextBrush  == Brushes.Yellow && myDrawText.DisplayText == "✦" && Position.MarketPosition == MarketPosition.Long)
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Close long - Squeezy! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }
+							  
+							  if(myDrawText.TextBrush  == Brushes.Yellow && myDrawText.DisplayText == "✦" && Position.MarketPosition == MarketPosition.Short)
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Close Short - Squeezy! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }							  
+							  
+							 if(myDrawText.TextBrush  == Brushes.Red  && myDrawText.DisplayText == "Eq\nHigh")
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Close long - Eq High! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }
+							  
+							 if(myDrawText.TextBrush  == Brushes.Lime  && myDrawText.DisplayText == "Eq\nLow")
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Close short - Eq Low! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }				
+							  
+							 if(myDrawText.TextBrush  == Brushes.Red  && myDrawText.DisplayText == "30U")
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Close long - 30U! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }
+							  
+							 if(myDrawText.TextBrush  == Brushes.Lime  && myDrawText.DisplayText == "30D")
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Close short - 30D! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }		
+							  
+							  if(myDrawText.TextBrush  == Brushes.Red  && myDrawText.DisplayText == "TR")
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Close long - TR! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }
+							  
+							 if(myDrawText.TextBrush  == Brushes.Lime  && myDrawText.DisplayText == "TR")
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Close short - TR! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }		
+							  
+							 if(myDrawText.TextBrush  == Brushes.Red  && myDrawText.DisplayText == "Wick")
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Close long - John Wick! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }
+							  
+							 if(myDrawText.TextBrush  == Brushes.Lime  && myDrawText.DisplayText == "Wick")
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Close short - John Wick! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }		
+							  
+							 Print(" myDrawText.GetAttachedToChartBars().Count) " + myDrawText.GetAttachedToChartBars().Count); 
+							  
+							  	if(myDrawText.TextBrush  == Brushes.Lime && myDrawText.DisplayText == "^")
+								{
+									
+									Print("test candle check ^ ");
+									
+								}
+							  
+							}//end of oldTag check 
+							
+							
+						    if ( myDrawText.Tag == "D" +PrevCandle && BarsSinceEntryExecution()>1  ) //if(myDrawText.Anchor.BarsAgo == 0) //if(myDrawText.Tag != BlankCandleTag)
+							{   
+							
+						     
+							  // TRADING TIMES ALLOWED
+								if  (
+									((Times[0][0].TimeOfDay >= new TimeSpan(07, 00, 0))
+									 && (Times[0][0].TimeOfDay <= new TimeSpan(16, 50, 0)))
+									 || ((Times[0][0].TimeOfDay >= new TimeSpan(18, 0, 0))
+									 && (Times[0][0].TimeOfDay <= new TimeSpan(23, 50, 0)))
+									)
+								
+								{
+								
+								
+								Print(" checking the previous candle!");
+							/* //dont open new trades.. just close or rev the old one - might have to just be close..
+							  if(myDrawText.TextBrush  == Brushes.Lime && myDrawText.DisplayText == "▲" && Position.MarketPosition == MarketPosition.Flat)
+							  {
+								  EnterLong(Convert.ToInt32(DefaultQuantity), @"OptimusBuy10");
+								  Print(" Buy! " + myDrawText.Tag + "text = " +myDrawText.DisplayText);
+								 // OldTag = myDrawText.Tag; 
+							  }
+							  
+
+							  
+							  if(myDrawText.TextBrush  == Brushes.Red && myDrawText.DisplayText == "▼"  && Position.MarketPosition == MarketPosition.Flat)
+							  {
+								  EnterShort(Convert.ToInt32(DefaultQuantity), @"OptimusSell10");
+								  Print(" Sell! " + myDrawText.Tag + "text = " +myDrawText.DisplayText);
+								 // OldTag = myDrawText.Tag; 
+							  }
+							  */
+							  
+							  if(myDrawText.TextBrush  == Brushes.Lime && myDrawText.DisplayText == "▲" && Position.MarketPosition == MarketPosition.Short  && Close[0] > ParabolicSAR1[0] && (LindaMACD().LindaColor==1 || LindaMACD().LindaColor ==2) && FisherTransform(9)[0] >0 && HMA(7)[1] < HMA(7)[0] )  //Slope(HMA(7), 3, 0) >0 )
+							  {
+								  EnterLong(Convert.ToInt32(DefaultQuantity), @"OptimusBuy10");
+								  Print(" Long on a short trade " + myDrawText.Tag + "text = " +myDrawText.DisplayText);
+								 // OldTag = myDrawText.Tag; 
+							  }							  
+							  
+							  if(myDrawText.TextBrush  == Brushes.Red && myDrawText.DisplayText == "▼"  && Position.MarketPosition == MarketPosition.Long && Close[0] < ParabolicSAR1[0] && (LindaMACD().LindaColor==3 || LindaMACD().LindaColor ==4) && FisherTransform(9)[0] <0 && HMA(7)[1] > HMA(7)[0] ) // Slope(HMA(7), 3, 0) <0)
+							  {
+								  EnterShort(Convert.ToInt32(DefaultQuantity), @"OptimusSell10");
+								  Print(" Short on a long trade! " + myDrawText.Tag + "text = " +myDrawText.DisplayText);
+								 // OldTag = myDrawText.Tag; 
+							  }
+							  
+							 
+						   } //END OF ENTRY TIMES CHECK
+							
+							    
+									
+									
+																
+							  if(myDrawText.TextBrush  == Brushes.Lime && myDrawText.DisplayText == "▲" && Position.MarketPosition == MarketPosition.Short )
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Long on a short trade close " + myDrawText.Tag + "text = " +myDrawText.DisplayText);
+								 // OldTag = myDrawText1.Tag; 
+							  }							  
+							  
+							  if(myDrawText.TextBrush  == Brushes.Red && myDrawText.DisplayText == "▼"  && Position.MarketPosition == MarketPosition.Long )
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Short on a long trade close " + myDrawText.Tag + "text = " +myDrawText.DisplayText);
+								 // OldTag = myDrawText1.Tag; 
+							  }
+																
+									
+							        	
+							  
+							  
+							  if(myDrawText.TextBrush  == Brushes.Yellow && myDrawText.DisplayText == "✦" && Position.MarketPosition == MarketPosition.Long)
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Close long - Squeezy! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }
+							  
+							  if(myDrawText.TextBrush  == Brushes.Yellow && myDrawText.DisplayText == "✦" && Position.MarketPosition == MarketPosition.Short)
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Close Short - Squeezy! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }							  
+							  
+							 if(myDrawText.TextBrush  == Brushes.Red  && myDrawText.DisplayText == "Eq\nHigh")
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Close long - Eq High! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }
+							  
+							 if(myDrawText.TextBrush  == Brushes.Lime  && myDrawText.DisplayText == "Eq\nLow")
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Close short - Eq Low! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }				
+							  
+							 if(myDrawText.TextBrush  == Brushes.Red  && myDrawText.DisplayText == "30U")
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Close long - 30U! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }
+							  
+							 if(myDrawText.TextBrush  == Brushes.Lime  && myDrawText.DisplayText == "30D")
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Close short - 30D! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }		
+							  
+							  if(myDrawText.TextBrush  == Brushes.Red  && myDrawText.DisplayText == "TR")
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Close long - TR! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }
+							  
+							 if(myDrawText.TextBrush  == Brushes.Lime  && myDrawText.DisplayText == "TR")
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Close short - TR! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }		
+							  
+							  
+							  if(myDrawText.TextBrush  == Brushes.Red  && myDrawText.DisplayText == "Wick")
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Close long - John Wick! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }
+							  
+							 if(myDrawText.TextBrush  == Brushes.Lime  && myDrawText.DisplayText == "Wick")
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Close short - John Wick! " + myDrawText.Tag+ "text = " +myDrawText.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }		
+							  
+							 Print(" myDrawText.GetAttachedToChartBars().Count) " + myDrawText.GetAttachedToChartBars().Count); 
+							}//end of oldTag check 
+							
+							
+						  }
+					                
+					      if (drawingTools[drawingTools.Count-1] is DrawingTools.Text)  //was 1.. but that looks like to be something else
+					      {
+					          DrawingTools.Text myDrawText1 = drawingTools[drawingTools.Count-1] as DrawingTools.Text; ////was 1.. but that looks like to be something else
+					                   
+					         Print(" Text1 objects: " + myDrawText1.Tag + " Text1Brush: " + myDrawText1.TextBrush + "time1 " + myDrawText1.GetAttachedToChartBars().Count);
+							  
+							 							  
+							//   Print(" bars1 ago " + myDrawText1.Anchor.BarsAgo);
+							//   Print(myDrawText1.Anchor.Time);
+							//  int CurrBar = CurrentBar-1;
+							//  Print(" tag1 check" );
+							// Print(" D" +CurrBar);
+							  
+							if((myDrawText1.Anchor.BarsAgo == 1  && BarsSinceEntryExecution()>1 ) || (  myDrawText1.Anchor.Time == Time[1] && BarsSinceEntryExecution()>1 )) //if(myDrawText1.Anchor.BarsAgo == 1 && BarsSinceEntryExecution()>1)  //if(myDrawText1.Tag != BlankCandleTag && myDrawText1.GetAttachedToChartBars().Count == Count-1 && BarsSinceEntryExecution()>1)
+							{  
+								//myDrawText1.Tag == "D" +CurrBar 
+							 
+								if  (
+									((Times[0][0].TimeOfDay >= new TimeSpan(07, 00, 0))
+									 && (Times[0][0].TimeOfDay <= new TimeSpan(16, 50, 0)))
+									 || ((Times[0][0].TimeOfDay >= new TimeSpan(18, 0, 0))
+									 && (Times[0][0].TimeOfDay <= new TimeSpan(23, 50, 0)))
+									)
+								{
+							
+									
+							 // DONT ENTER A NEW TRADE ON THE PREVIOUS DRAWING
+						    /*
+							  if(myDrawText1.TextBrush  == Brushes.Lime && myDrawText1.DisplayText == "▲" && Position.MarketPosition == MarketPosition.Flat)
+							  {
+								  EnterLong(Convert.ToInt32(DefaultQuantity), @"OptimusBuy10");
+								  Print(" Buy! " + myDrawText1.Tag + "text1 = " +myDrawText1.DisplayText);
+								 // OldTag = myDrawText1.Tag; 
+							  }
+							  
+
+							  
+							  if(myDrawText1.TextBrush  == Brushes.Red && myDrawText1.DisplayText == "▼"  && Position.MarketPosition == MarketPosition.Flat)
+							  {
+								  EnterShort(Convert.ToInt32(DefaultQuantity), @"OptimusSell10");
+								  Print(" Sell! " + myDrawText1.Tag + "text1 = " +myDrawText1.DisplayText);
+								 // OldTag = myDrawText1.Tag; 
+							  }
+							 */
+							  
+								//ONLY REVERSR OR CLOSE EXISTING TRADES
+							  if(myDrawText1.TextBrush  == Brushes.Lime && myDrawText1.DisplayText == "▲" && Position.MarketPosition == MarketPosition.Short && Close[0] > ParabolicSAR1[0] && (LindaMACD().LindaColor==1 || LindaMACD().LindaColor ==2) && FisherTransform(9)[0] >0 && HMA(7)[1] < HMA(7)[0] )  //Slope(HMA(7), 3, 0) >0  )
+							  {
+								  EnterLong(Convert.ToInt32(DefaultQuantity), @"OptimusBuy10");
+								  Print(" Long on a short trade " + myDrawText1.Tag + "text1 = " +myDrawText1.DisplayText);
+								 // OldTag = myDrawText1.Tag; 
+							  }							  
+							  
+							  if(myDrawText1.TextBrush  == Brushes.Red && myDrawText1.DisplayText == "▼"  && Position.MarketPosition == MarketPosition.Long && Close[0] < ParabolicSAR1[0] && (LindaMACD().LindaColor==3 || LindaMACD().LindaColor ==4) && FisherTransform(9)[0] <0 && HMA(7)[1] > HMA(7)[0] )  // Slope(HMA(7), 3, 0) <0)
+							  {
+								  EnterShort(Convert.ToInt32(DefaultQuantity), @"OptimusSell10");
+								  Print(" Short on a long trade! " + myDrawText1.Tag + "text1 = " +myDrawText1.DisplayText);
+								 // OldTag = myDrawText1.Tag; 
+							  }
+							  
+							   
+							 	} //END OF ENTRY TIMES CHECK
+								
+									
+																
+							  if(myDrawText1.TextBrush  == Brushes.Lime && myDrawText1.DisplayText == "▲" && Position.MarketPosition == MarketPosition.Short)
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Long on a short trade close " + myDrawText1.Tag + "text1 = " +myDrawText1.DisplayText);
+								 // OldTag = myDrawText1.Tag; 
+							  }							  
+							  
+							  if(myDrawText1.TextBrush  == Brushes.Red && myDrawText1.DisplayText == "▼"  && Position.MarketPosition == MarketPosition.Long)
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Short on a long trade close " + myDrawText1.Tag + "text1 = " +myDrawText1.DisplayText);
+								 // OldTag = myDrawText1.Tag; 
+							  }
+																
+								
+							  if(myDrawText1.TextBrush  == Brushes.Yellow && myDrawText1.DisplayText == "✦" && Position.MarketPosition == MarketPosition.Long)
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Close long - Squeezy! " + myDrawText1.Tag+ "text1 = " +myDrawText1.DisplayText);
+								//  OldTag = myDrawText1.Tag; 
+							  }
+							  
+							  if(myDrawText1.TextBrush  == Brushes.Yellow && myDrawText1.DisplayText == "✦" && Position.MarketPosition == MarketPosition.Short)
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Close Short - Squeezy! " + myDrawText1.Tag+ "text1 = " +myDrawText1.DisplayText);
+								//  OldTag = myDrawText1.Tag; 
+							  }							  
+							  
+							 if(myDrawText1.TextBrush  == Brushes.Red  && myDrawText1.DisplayText == "Eq\nHigh")
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Close long - Eq High! " + myDrawText1.Tag+ "text1 = " +myDrawText1.DisplayText);
+								//  OldTag = myDrawText1.Tag; 
+							  }
+							  
+							 if(myDrawText1.TextBrush  == Brushes.Lime  && myDrawText1.DisplayText == "Eq\nLow")
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Close short - Eq Low! " + myDrawText1.Tag+ "text1 = " +myDrawText1.DisplayText);
+								//  OldTag = myDrawText1.Tag; 
+							  }				
+							  
+							 if(myDrawText1.TextBrush  == Brushes.Red  && myDrawText1.DisplayText == "30U")
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Close long - 30U! " + myDrawText1.Tag+ "text1 = " +myDrawText1.DisplayText);
+								//  OldTag = myDrawText1.Tag; 
+							  }
+							  
+							 if(myDrawText1.TextBrush  == Brushes.Lime  && myDrawText1.DisplayText == "30D")
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Close short - 30D! " + myDrawText1.Tag+ "text1 = " +myDrawText1.DisplayText);
+								//  OldTag = myDrawText1.Tag; 
+							  }		
+							  
+							  if(myDrawText1.TextBrush  == Brushes.Red  && myDrawText1.DisplayText == "TR")
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Close long - TR! " + myDrawText1.Tag+ "text1 = " +myDrawText1.DisplayText);
+								//  OldTag = myDrawText1.Tag; 
+							  }
+							  
+							 if(myDrawText1.TextBrush  == Brushes.Lime  && myDrawText1.DisplayText == "TR")
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Close short - TR! " + myDrawText1.Tag+ "text1 = " +myDrawText1.DisplayText);
+								//  OldTag = myDrawText1.T 
+							  }			
+							  
+							  if(myDrawText1.TextBrush  == Brushes.Red  && myDrawText1.DisplayText == "Wick")
+							  {
+								  ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+								  Print(" Close long - John Wick! " + myDrawText1.Tag+ "text = " +myDrawText1.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }
+							  
+							 if(myDrawText1.TextBrush  == Brushes.Lime  && myDrawText1.DisplayText == "Wick")
+							  {
+								  ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+								  Print(" Close short - John Wick! " + myDrawText1.Tag+ "text = " +myDrawText1.DisplayText);
+								//  OldTag = myDrawText.Tag; 
+							  }		
+							  
+							  
+							  
+							  Print(" myDrawText1.GetAttachedToChartBars().Count) " + myDrawText1.GetAttachedToChartBars().Count); 
+							}//end of oldTag check  
+					      }//end of check the previous candle		
+			}//end of check CanTrade!
+					  
+						  
+						  
+						  
+				//   Print(" 0 "+ drawingTools[0].Tag);  //thsi is correct - 
+				   //Print(drawingTools[drawingTools.Count].Tag);
+				//   Print(" 1 "+ drawingTools[1].Tag);  
+				//   Print(" drawingTools.Count-1 " +drawingTools[drawingTools.Count-1].Tag); //this was the previouly drawn object
+				//   Print(" Count " + Count); //The total number of bars or data points.
+				//   Print(" CurrentBar " + CurrentBar);
+		        //   Print("  drawingTools[drawingTools.Count=1] " + drawingTools[drawingTools.Count-1]);
+				  
+			  
+					   
+
+			//EXIT AT 4:55PM
+			 // Set 3
+			if ((Times[0][0].TimeOfDay == new TimeSpan(16, 55, 0))
+				 && (Position.MarketPosition == MarketPosition.Long))
+			{
+				//StopStrategy();
+				ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+			}
+			
+			 // Set 4
+			if ((Times[0][0].TimeOfDay == new TimeSpan(16, 55, 0))
+				 && (Position.MarketPosition == MarketPosition.Short))
+			{
+				//StopStrategy();
+				ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+				
+			}
+            
+			
+			/*
+			// 2K STOP LOSS
+			 // Set 5
+			if ((Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) <= -2000)
+				 && (Position.MarketPosition == MarketPosition.Long))
+			{
+				ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+			}
+			
+			 // Set 6
+			if ((Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) <= -2000)
+				 && (Position.MarketPosition == MarketPosition.Short))
+			{
+				ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+			}
+			
+			// 1K TAKE PROFIT
+			 // Set 7
+			if ((Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) >= 1000)
+				 && (Position.MarketPosition == MarketPosition.Long))
+			{
+				ExitLong(Convert.ToInt32(DefaultQuantity), @"OptimusCloseBuy10", @"OptimusBuy10");
+			}
+			
+			 // Set 8
+			if ((Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency, Close[0]) >= 1000)
+				 && (Position.MarketPosition == MarketPosition.Short))
+			{
+				ExitShort(Convert.ToInt32(DefaultQuantity), @"OptimusCloseSell10", @"OptimusSell10");
+			}
+           */
+
+		}
+		
+		private void StopStrategy()
+		{
+			// If our Long Limit order is still active we will need to cancel it.
+			//CancelOrder("OptimusBuy10");
+			//CancelOrder("OptimusSell10");
+			
+			// If we have a position we will need to close the position
+			if (Position.MarketPosition == MarketPosition.Long)
+			{
+				/* We use an IOrder here so we can monitor when our exit order becomes filled in the
+				OnOrderUpdate() method. */
+				ExitLong("OptimusBuy10");
+			}
+			else if (Position.MarketPosition == MarketPosition.Short)
+			{
+				/* We use an IOrder here so we can monitor when our exit order becomes filled in the
+				OnOrderUpdate() method. */
+				ExitShort("OptimusSell10");
+			}
+			else
+			{
+				/* If we have no more active orders and all our positions are closed, it is now safe to
+				stop the strategy. */
+				//haltProcessing = true;
+				CanTrade=false;
+			}
+		}
+		#region Properties
+		[NinjaScriptProperty]
+		[Display(Name="BlankCandleTag", Description="the tag of the 1st drawing that comes up if there is a blank candle", Order=1, GroupName="Parameters")]
+		public string BlankCandleTag
+		{ get; set; }
+		
+        [Display(Name="DailyTakeProfit", Description="Max profit to make each day and then stop trading", Order=1, GroupName="Parameters")]
+		public double DailyTakeProfit
+		{ get; set; }
+		
+	    [Display(Name="DailyStopLoss", Description="Max loss to accumilate each day and then stop trading", Order=1, GroupName="Parameters")]
+		public double DailyStopLoss
+		{ get; set; }
+		
+		 [Display(Name="MontlyTarget", Description="Initial balance + profit target to pass", Order=1, GroupName="Parameters")]
+		public double MontlyTarget
+		{ get; set; }
+		#endregion
+
+	}
+}
